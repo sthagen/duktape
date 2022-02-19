@@ -5,12 +5,6 @@
 #if !defined(DUK_UTIL_H_INCLUDED)
 #define DUK_UTIL_H_INCLUDED
 
-#if defined(DUK_USE_GET_RANDOM_DOUBLE)
-#define DUK_UTIL_GET_RANDOM_DOUBLE(thr) DUK_USE_GET_RANDOM_DOUBLE((thr)->heap_udata)
-#else
-#define DUK_UTIL_GET_RANDOM_DOUBLE(thr) duk_util_tinyrandom_get_double(thr)
-#endif
-
 /*
  *  Some useful constants
  */
@@ -358,8 +352,8 @@ DUK_INTERNAL_DECL void duk_bw_assert_valid(duk_hthread *thr, duk_bufwriter_ctx *
 #define DUK_BW_WRITE_RAW_HSTRING(thr, bw_ctx, val) \
 	do { \
 		duk_size_t duk__val_len; \
-		duk__val_len = DUK_HSTRING_GET_BYTELEN((val)); \
-		duk_memcpy_unsafe((void *) ((bw_ctx)->p), (const void *) DUK_HSTRING_GET_DATA((val)), duk__val_len); \
+		duk__val_len = duk_hstring_get_bytelen((val)); \
+		duk_memcpy_unsafe((void *) ((bw_ctx)->p), (const void *) duk_hstring_get_data((val)), duk__val_len); \
 		(bw_ctx)->p += duk__val_len; \
 	} while (0)
 #define DUK_BW_WRITE_RAW_HBUFFER(thr, bw_ctx, val) \
@@ -477,9 +471,9 @@ DUK_INTERNAL_DECL void duk_bw_assert_valid(duk_hthread *thr, duk_bufwriter_ctx *
 #define DUK_BW_WRITE_ENSURE_HSTRING(thr, bw_ctx, val) \
 	do { \
 		duk_size_t duk__val_len; \
-		duk__val_len = DUK_HSTRING_GET_BYTELEN((val)); \
+		duk__val_len = duk_hstring_get_bytelen((val)); \
 		DUK_BW_ENSURE((thr), (bw_ctx), duk__val_len); \
-		duk_memcpy_unsafe((void *) ((bw_ctx)->p), (const void *) DUK_HSTRING_GET_DATA((val)), duk__val_len); \
+		duk_memcpy_unsafe((void *) ((bw_ctx)->p), (const void *) duk_hstring_get_data((val)), duk__val_len); \
 		(bw_ctx)->p += duk__val_len; \
 	} while (0)
 #define DUK_BW_WRITE_ENSURE_HBUFFER(thr, bw_ctx, val) \
@@ -619,6 +613,8 @@ DUK_INTERNAL_DECL void duk_raw_writeinc_cesu8(duk_uint8_t **p, duk_ucodepoint_t 
 #if defined(DUK_USE_DEBUGGER_SUPPORT) /* For now only needed by the debugger. */
 DUK_INTERNAL_DECL void duk_byteswap_bytes(duk_uint8_t *p, duk_small_uint_t len);
 #endif
+
+DUK_INTERNAL_DECL duk_double_t duk_util_get_random_double(duk_hthread *thr);
 
 /* memcpy(), memmove() etc wrappers.  The plain variants like duk_memcpy()
  * assume C99+ and 'src' and 'dst' pointers must be non-NULL even when the

@@ -384,6 +384,7 @@ function getToplevelFiles() {
         'Makefile.jsoncbor',
         'Makefile.sandbox',
         'Makefile.codepage',
+        'duktape.pc.in',
         'mandel.js'
     ], 'dist-files', '.'));
 
@@ -491,6 +492,7 @@ function createTempFiles(args) {
     copyFileUtf8AtSignReplace(pathJoin(repoDirectory, 'dist-files', 'Makefile.sharedlibrary'),
                               pathJoin(distTempDirectory, 'Makefile.sharedlibrary'), {
                                   DUK_VERSION: String(dukVersion),
+                                  DUK_VERSION_FORMATTED: String(args.dukVersionFormatted),
                                   SONAME_VERSION: String(Math.floor(dukVersion / 100))  // 10500 -> 105
                               });
 

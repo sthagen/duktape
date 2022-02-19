@@ -5,8 +5,9 @@
  *  allowing values larger than the official UTF-8 range (used internally)
  *  and also allowing UTF-8 encoding of surrogate pairs (CESU-8 format).
  *  Strings may also be invalid UTF-8 altogether which is the case e.g. with
- *  strings used as internal property names and raw buffers converted to
- *  strings.  In such cases the 'clen' field contains an inaccurate value.
+ *  strings used to represent Symbols.  In such cases the 'clen' field
+ *  contains an inaccurate (but consistent) value, with all bytes except
+ *  UTF-8 continuation bytes (0x80-0xbf) counted as +1 for clen.
  *
  *  ECMAScript requires support for 32-bit long strings.  However, since each
  *  16-bit codepoint can take 3 bytes in CESU-8, this representation can only
@@ -32,11 +33,8 @@
 #define DUK_HSTRING_MAX_BYTELEN (0x7fffffffUL)
 #endif
 
-/* XXX: could add flags for "is valid CESU-8" (ECMAScript compatible strings),
- * "is valid UTF-8", "is valid extended UTF-8" (internal strings are not,
- * regexp bytecode is), and "contains non-BMP characters".  These are not
- * needed right now.
- */
+/* Maximum string charlen equals maximum bytelen for the ASCII case. */
+#define DUK_HSTRING_MAX_CHARLEN DUK_HSTRING_MAX_BYTELEN
 
 /* With lowmem builds the high 16 bits of duk_heaphdr are used for other
  * purposes, so this leaves 7 duk_heaphdr flags and 9 duk_hstring flags.
@@ -82,95 +80,10 @@
 #define DUK_HSTRING_CLEAR_EXTDATA(x)              DUK_HEAPHDR_CLEAR_FLAG_BITS(&(x)->hdr, DUK_HSTRING_FLAG_EXTDATA)
 #define DUK_HSTRING_CLEAR_PINNED_LITERAL(x)       DUK_HEAPHDR_CLEAR_FLAG_BITS(&(x)->hdr, DUK_HSTRING_FLAG_PINNED_LITERAL)
 
-#if 0 /* Slightly smaller code without explicit flag, but explicit flag \
-       * is very useful when 'clen' is dropped. \
-       */
-#define DUK_HSTRING_IS_ASCII(x) (DUK_HSTRING_GET_BYTELEN((x)) == DUK_HSTRING_GET_CHARLEN((x)))
-#endif
-#define DUK_HSTRING_IS_ASCII(x) DUK_HSTRING_HAS_ASCII((x)) /* lazily set! */
-#define DUK_HSTRING_IS_EMPTY(x) (DUK_HSTRING_GET_BYTELEN((x)) == 0)
-
-#if defined(DUK_USE_STRHASH16)
-#define DUK_HSTRING_GET_HASH(x) ((x)->hdr.h_flags >> 16)
-#define DUK_HSTRING_SET_HASH(x, v) \
-	do { \
-		(x)->hdr.h_flags = ((x)->hdr.h_flags & 0x0000ffffUL) | ((v) << 16); \
-	} while (0)
-#else
-#define DUK_HSTRING_GET_HASH(x) ((x)->hash)
-#define DUK_HSTRING_SET_HASH(x, v) \
-	do { \
-		(x)->hash = (v); \
-	} while (0)
-#endif
-
-#if defined(DUK_USE_STRLEN16)
-#define DUK_HSTRING_GET_BYTELEN(x) ((x)->hdr.h_strextra16)
-#define DUK_HSTRING_SET_BYTELEN(x, v) \
-	do { \
-		(x)->hdr.h_strextra16 = (v); \
-	} while (0)
-#if defined(DUK_USE_HSTRING_CLEN)
-#define DUK_HSTRING_GET_CHARLEN(x) duk_hstring_get_charlen((x))
-#define DUK_HSTRING_SET_CHARLEN(x, v) \
-	do { \
-		(x)->clen16 = (v); \
-	} while (0)
-#else
-#define DUK_HSTRING_GET_CHARLEN(x) duk_hstring_get_charlen((x))
-#define DUK_HSTRING_SET_CHARLEN(x, v) \
-	do { \
-		DUK_ASSERT(0); /* should never be called */ \
-	} while (0)
-#endif
-#else
-#define DUK_HSTRING_GET_BYTELEN(x) ((x)->blen)
-#define DUK_HSTRING_SET_BYTELEN(x, v) \
-	do { \
-		(x)->blen = (v); \
-	} while (0)
-#define DUK_HSTRING_GET_CHARLEN(x) duk_hstring_get_charlen((x))
-#define DUK_HSTRING_SET_CHARLEN(x, v) \
-	do { \
-		(x)->clen = (v); \
-	} while (0)
-#endif
-
-#if defined(DUK_USE_HSTRING_EXTDATA)
-#define DUK_HSTRING_GET_EXTDATA(x) ((x)->extdata)
-#define DUK_HSTRING_GET_DATA(x) \
-	(DUK_HSTRING_HAS_EXTDATA((x)) ? DUK_HSTRING_GET_EXTDATA((const duk_hstring_external *) (x)) : \
-                                        ((const duk_uint8_t *) ((x) + 1)))
-#else
-#define DUK_HSTRING_GET_DATA(x) ((const duk_uint8_t *) ((x) + 1))
-#endif
-
-#define DUK_HSTRING_GET_DATA_END(x) (DUK_HSTRING_GET_DATA((x)) + (x)->blen)
-
 /* Marker value; in E5 2^32-1 is not a valid array index (2^32-2 is highest
  * valid).
  */
 #define DUK_HSTRING_NO_ARRAY_INDEX (0xffffffffUL)
-
-#if defined(DUK_USE_HSTRING_ARRIDX)
-#define DUK_HSTRING_GET_ARRIDX_FAST(h) ((h)->arridx)
-#define DUK_HSTRING_GET_ARRIDX_SLOW(h) ((h)->arridx)
-#else
-/* Get array index related to string (or return DUK_HSTRING_NO_ARRAY_INDEX);
- * avoids helper call if string has no array index value.
- */
-#define DUK_HSTRING_GET_ARRIDX_FAST(h) \
-	(DUK_HSTRING_HAS_ARRIDX((h)) ? duk_js_to_arrayindex_hstring_fast_known((h)) : DUK_HSTRING_NO_ARRAY_INDEX)
-
-/* Slower but more compact variant. */
-#define DUK_HSTRING_GET_ARRIDX_SLOW(h) (duk_js_to_arrayindex_hstring_fast((h)))
-#endif
-
-/* XXX: these actually fit into duk_hstring */
-#define DUK_SYMBOL_TYPE_HIDDEN    0
-#define DUK_SYMBOL_TYPE_GLOBAL    1
-#define DUK_SYMBOL_TYPE_LOCAL     2
-#define DUK_SYMBOL_TYPE_WELLKNOWN 3
 
 /* Assertion for duk_hstring validity. */
 #if defined(DUK_USE_ASSERTIONS)
@@ -252,14 +165,31 @@ struct duk_hstring_external {
  *  Prototypes
  */
 
+DUK_INTERNAL_DECL duk_bool_t duk_hstring_is_ascii(duk_hstring *h);
+DUK_INTERNAL_DECL duk_bool_t duk_hstring_is_empty(duk_hstring *h);
+DUK_INTERNAL_DECL duk_bool_t duk_hstring_is_symbol_initial_byte(duk_uint8_t t);
+DUK_INTERNAL_DECL duk_uint32_t duk_hstring_get_hash(duk_hstring *h);
+DUK_INTERNAL_DECL void duk_hstring_set_hash(duk_hstring *h, duk_uint32_t hash);
+DUK_INTERNAL_DECL duk_size_t duk_hstring_get_bytelen(duk_hstring *h);
+DUK_INTERNAL_DECL void duk_hstring_set_bytelen(duk_hstring *h, duk_size_t len);
+DUK_INTERNAL_DECL duk_size_t duk_hstring_get_charlen(duk_hstring *h);
+DUK_INTERNAL_DECL void duk_hstring_set_charlen(duk_hstring *h, duk_size_t len);
+DUK_INTERNAL_DECL duk_uarridx_t duk_hstring_get_arridx_fast(duk_hstring *h);
+DUK_INTERNAL_DECL duk_uarridx_t duk_hstring_get_arridx_fast_known(duk_hstring *h);
+DUK_INTERNAL_DECL duk_uarridx_t duk_hstring_get_arridx_slow(duk_hstring *h);
+#if defined(DUK_USE_HSTRING_EXTDATA)
+DUK_INTERNAL_DECL const duk_uint8_t *duk_hstring_get_extdata(duk_hstring *h);
+#endif
+DUK_INTERNAL_DECL const duk_uint8_t *duk_hstring_get_data(duk_hstring *h);
+DUK_INTERNAL_DECL const duk_uint8_t *duk_hstring_get_data_and_bytelen(duk_hstring *h, duk_size_t *out_blen);
+DUK_INTERNAL_DECL const duk_uint8_t *duk_hstring_get_data_end(duk_hstring *h);
+
 DUK_INTERNAL_DECL duk_ucodepoint_t duk_hstring_char_code_at_raw(duk_hthread *thr,
                                                                 duk_hstring *h,
                                                                 duk_uint_t pos,
                                                                 duk_bool_t surrogate_aware);
 DUK_INTERNAL_DECL duk_bool_t duk_hstring_equals_ascii_cstring(duk_hstring *h, const char *cstr);
-DUK_INTERNAL_DECL duk_size_t duk_hstring_get_charlen(duk_hstring *h);
-#if !defined(DUK_USE_HSTRING_LAZY_CLEN)
-DUK_INTERNAL_DECL void duk_hstring_init_charlen(duk_hstring *h);
-#endif
+DUK_INTERNAL_DECL duk_bool_t duk_hstring_is_symbol_initial_byte(duk_uint8_t t);
+DUK_INTERNAL_DECL duk_bool_t duk_hstring_is_valid_hstring_data(const duk_uint8_t *p, duk_size_t blen);
 
 #endif /* DUK_HSTRING_H_INCLUDED */

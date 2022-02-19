@@ -25,11 +25,12 @@
  */
 
 DUK_LOCAL const duk_uint8_t *duk__load_string_raw(duk_hthread *thr, const duk_uint8_t *p) {
-	duk_uint32_t len;
+	duk_uint32_t blen;
 
-	len = DUK_RAW_READINC_U32_BE(p);
-	duk_push_lstring(thr, (const char *) p, len);
-	p += len;
+	blen = DUK_RAW_READINC_U32_BE(p);
+	DUK_ASSERT(duk_hstring_is_valid_hstring_data(p, (duk_size_t) blen));
+	duk_push_lstring(thr, (const char *) p, blen);
+	p += blen;
 	return p;
 }
 
@@ -46,17 +47,18 @@ DUK_LOCAL const duk_uint8_t *duk__load_buffer_raw(duk_hthread *thr, const duk_ui
 }
 
 DUK_LOCAL duk_uint8_t *duk__dump_hstring_raw(duk_uint8_t *p, duk_hstring *h) {
-	duk_size_t len;
+	duk_size_t blen;
 	duk_uint32_t tmp32;
+	const void *data;
 
 	DUK_ASSERT(h != NULL);
 
-	len = DUK_HSTRING_GET_BYTELEN(h);
-	DUK_ASSERT(len <= 0xffffffffUL); /* string limits */
-	tmp32 = (duk_uint32_t) len;
+	data = (const void *) duk_hstring_get_data_and_bytelen(h, &blen);
+	DUK_ASSERT(blen <= 0xffffffffUL); /* string limits */
+	tmp32 = (duk_uint32_t) blen;
 	DUK_RAW_WRITEINC_U32_BE(p, tmp32);
-	duk_memcpy((void *) p, (const void *) DUK_HSTRING_GET_DATA(h), len);
-	p += len;
+	duk_memcpy((void *) p, data, blen);
+	p += blen;
 	return p;
 }
 
@@ -95,7 +97,7 @@ DUK_LOCAL duk_uint8_t *duk__dump_string_prop(duk_hthread *thr,
 		DUK_ASSERT(h_str != NULL);
 	}
 	DUK_ASSERT(DUK_HSTRING_MAX_BYTELEN <= 0x7fffffffUL); /* ensures no overflow */
-	p = DUK_BW_ENSURE_RAW(thr, bw_ctx, 4U + DUK_HSTRING_GET_BYTELEN(h_str), p);
+	p = DUK_BW_ENSURE_RAW(thr, bw_ctx, 4U + duk_hstring_get_bytelen(h_str), p);
 	p = duk__dump_hstring_raw(p, h_str);
 	return p;
 }
@@ -175,7 +177,7 @@ DUK_LOCAL duk_uint8_t *duk__dump_varmap(duk_hthread *thr, duk_uint8_t *p, duk_bu
 #endif
 
 			DUK_ASSERT(DUK_HSTRING_MAX_BYTELEN <= 0x7fffffffUL); /* ensures no overflow */
-			p = DUK_BW_ENSURE_RAW(thr, bw_ctx, 4U + DUK_HSTRING_GET_BYTELEN(key) + 4U, p);
+			p = DUK_BW_ENSURE_RAW(thr, bw_ctx, 4U + duk_hstring_get_bytelen(key) + 4U, p);
 			p = duk__dump_hstring_raw(p, key);
 			DUK_RAW_WRITEINC_U32_BE(p, val);
 		}
@@ -212,10 +214,10 @@ DUK_LOCAL duk_uint8_t *duk__dump_formals(duk_hthread *thr, duk_uint8_t *p, duk_b
 
 			varname = DUK_TVAL_GET_STRING(tv_val);
 			DUK_ASSERT(varname != NULL);
-			DUK_ASSERT(DUK_HSTRING_GET_BYTELEN(varname) >= 1);
+			DUK_ASSERT(duk_hstring_get_bytelen(varname) >= 1);
 
 			DUK_ASSERT(DUK_HSTRING_MAX_BYTELEN <= 0x7fffffffUL); /* ensures no overflow */
-			p = DUK_BW_ENSURE_RAW(thr, bw_ctx, 4U + DUK_HSTRING_GET_BYTELEN(varname), p);
+			p = DUK_BW_ENSURE_RAW(thr, bw_ctx, 4U + duk_hstring_get_bytelen(varname), p);
 			p = duk__dump_hstring_raw(p, varname);
 		}
 	} else {
@@ -290,8 +292,9 @@ static duk_uint8_t *duk__dump_func(duk_hthread *thr, duk_hcompfunc *func, duk_bu
 	ins_end = DUK_HCOMPFUNC_GET_CODE_END(thr->heap, func);
 	DUK_ASSERT((duk_size_t) (ins_end - ins) == (duk_size_t) count_instr);
 #if defined(DUK_USE_INTEGER_BE)
-	duk_memcpy_unsafe((void *) p, (const void *) ins, (size_t) (ins_end - ins));
-	p += (size_t) (ins_end - ins);
+	duk_memcpy_unsafe((void *) p, (const void *) ins, count_instr * sizeof(duk_instr_t));
+	p += count_instr * sizeof(duk_instr_t);
+	DUK_UNREF(ins_end);
 #else
 	while (ins != ins_end) {
 		tmp32 = (duk_uint32_t) (*ins);
@@ -311,7 +314,7 @@ static duk_uint8_t *duk__dump_func(duk_hthread *thr, duk_hcompfunc *func, duk_bu
 			h_str = DUK_TVAL_GET_STRING(tv);
 			DUK_ASSERT(h_str != NULL);
 			DUK_ASSERT(DUK_HSTRING_MAX_BYTELEN <= 0x7fffffffUL); /* ensures no overflow */
-			p = DUK_BW_ENSURE_RAW(thr, bw_ctx, 1U + 4U + DUK_HSTRING_GET_BYTELEN(h_str), p);
+			p = DUK_BW_ENSURE_RAW(thr, bw_ctx, 1U + 4U + duk_hstring_get_bytelen(h_str), p);
 			*p++ = DUK__SER_STRING;
 			p = duk__dump_hstring_raw(p, h_str);
 		} else {

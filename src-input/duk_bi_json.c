@@ -32,6 +32,7 @@ DUK_LOCAL_DECL void duk__json_dec_syntax_error(duk_json_dec_ctx *js_ctx);
 DUK_LOCAL_DECL void duk__json_dec_eat_white(duk_json_dec_ctx *js_ctx);
 #if defined(DUK_USE_JX)
 DUK_LOCAL_DECL duk_uint8_t duk__json_dec_peek(duk_json_dec_ctx *js_ctx);
+DUK_LOCAL_DECL void duk__json_dec_advance(duk_json_dec_ctx *js_ctx);
 #endif
 DUK_LOCAL_DECL duk_uint8_t duk__json_dec_get(duk_json_dec_ctx *js_ctx);
 DUK_LOCAL_DECL duk_uint8_t duk__json_dec_get_nonwhite(duk_json_dec_ctx *js_ctx);
@@ -248,6 +249,11 @@ DUK_LOCAL duk_uint8_t duk__json_dec_peek(duk_json_dec_ctx *js_ctx) {
 	DUK_ASSERT(js_ctx->p <= js_ctx->p_end);
 	return *js_ctx->p;
 }
+
+DUK_LOCAL void duk__json_dec_advance(duk_json_dec_ctx *js_ctx) {
+	DUK_ASSERT(js_ctx->p <= js_ctx->p_end);
+	js_ctx->p++;
+}
 #endif
 
 DUK_LOCAL duk_uint8_t duk__json_dec_get(duk_json_dec_ctx *js_ctx) {
@@ -261,11 +267,21 @@ DUK_LOCAL duk_uint8_t duk__json_dec_get_nonwhite(duk_json_dec_ctx *js_ctx) {
 }
 
 /* For JX, expressing the whole unsigned 32-bit range matters. */
-DUK_LOCAL duk_uint_fast32_t duk__json_dec_decode_hex_escape(duk_json_dec_ctx *js_ctx, duk_small_uint_t n) {
-	duk_small_uint_t i;
+DUK_LOCAL duk_uint_fast32_t duk__json_dec_decode_hex_escape(duk_json_dec_ctx *js_ctx, duk_small_uint_t num) {
+	duk_small_uint_t i, n;
 	duk_uint_fast32_t res = 0;
 	duk_uint8_t x;
 	duk_small_int_t t;
+
+#if defined(DUK_USE_JX)
+	if (num == 0) {
+		n = 9; /* Decode at most 8 digits, must finish within the main loop. */
+	} else {
+		n = num;
+	}
+#else
+	n = num;
+#endif
 
 	for (i = 0; i < n; i++) {
 		/* XXX: share helper from lexer; duk_lexer.c / hexval(). */
@@ -279,11 +295,24 @@ DUK_LOCAL duk_uint_fast32_t duk__json_dec_decode_hex_escape(duk_json_dec_ctx *js
 		if (DUK_LIKELY(t >= 0)) {
 			res = (res * 16) + (duk_uint_fast32_t) t;
 		} else {
-			/* catches EOF and invalid digits */
+#if defined(DUK_USE_JX)
+			if (num == 0 && x == DUK_ASC_RCURLY && i > 0) {
+				/* End of \u{1abcd} style escape. */
+				goto accept;
+			}
+#endif
+			/* Catches EOF and invalid digits. */
 			goto syntax_error;
 		}
 	}
 
+#if defined(DUK_USE_JX)
+	if (num == 0) {
+		goto syntax_error;
+	}
+#endif
+
+accept:
 	DUK_DDD(DUK_DDDPRINT("final hex decoded value: %ld", (long) res));
 	return res;
 
@@ -307,7 +336,7 @@ DUK_LOCAL void duk__json_dec_req_stridx(duk_json_dec_ctx *js_ctx, duk_small_uint
 	h = DUK_HTHREAD_GET_STRING(js_ctx->thr, stridx);
 	DUK_ASSERT(h != NULL);
 
-	p = (const duk_uint8_t *) DUK_HSTRING_GET_DATA(h) + 1;
+	p = (const duk_uint8_t *) duk_hstring_get_data(h) + 1;
 	DUK_ASSERT(*(js_ctx->p - 1) == *(p - 1)); /* first character has been matched */
 
 	for (;;) {
@@ -361,6 +390,14 @@ DUK_LOCAL duk_small_int_t duk__json_dec_string_escape(duk_json_dec_ctx *js_ctx, 
 		cp = 0x08;
 		break;
 	case DUK_ASC_LC_U: {
+#if defined(DUK_USE_JX)
+		if (duk__json_dec_peek(js_ctx) == DUK_ASC_LCURLY) {
+			/* \u{1abcd} style escape. */
+			duk__json_dec_advance(js_ctx);
+			cp = duk__json_dec_decode_hex_escape(js_ctx, 0);
+			break;
+		}
+#endif
 		cp = duk__json_dec_decode_hex_escape(js_ctx, 4);
 		break;
 	}
@@ -1111,6 +1148,42 @@ DUK_LOCAL void duk__unemit_1(duk_json_enc_ctx *js_ctx) {
 #define DUK__MKESC(nybbles, esc1, esc2) \
 	(((duk_uint_fast32_t) (nybbles)) << 16) | (((duk_uint_fast32_t) (esc1)) << 8) | ((duk_uint_fast32_t) (esc2))
 
+DUK_LOCAL duk_uint_fast32_t duk__json_select_esc(duk_json_enc_ctx *js_ctx, duk_uint_fast32_t cp) {
+#if defined(DUK_USE_JX)
+	if (DUK_LIKELY(cp < 0x100UL)) {
+		if (DUK_UNLIKELY(js_ctx->flag_ext_custom != 0U)) {
+			return DUK__MKESC(2, DUK_ASC_BACKSLASH, DUK_ASC_LC_X);
+		} else {
+			return DUK__MKESC(4, DUK_ASC_BACKSLASH, DUK_ASC_LC_U);
+		}
+	}
+#endif
+
+	if (DUK_LIKELY(cp < 0x10000UL)) {
+		return DUK__MKESC(4, DUK_ASC_BACKSLASH, DUK_ASC_LC_U);
+	}
+
+#if defined(DUK_USE_JX)
+	if (DUK_LIKELY(js_ctx->flag_ext_custom != 0U)) {
+		return DUK__MKESC(8, DUK_ASC_BACKSLASH, DUK_ASC_UC_U);
+	}
+#endif
+
+	if (cp <= 0x10ffffUL) {
+		/* For non-BMP characters in [U+10000,U+10FFFF] split
+		 * into a \u escaped surrogate pair.
+		 */
+		return 0;
+	}
+
+	/* With WTF-8 sanitization this case shouldn't occur.
+	 * Output something useful for characters above U+10FFFF.
+	 * This won't roundtrip but will still be more or less
+	 * readable and more useful than an error.
+	 */
+	return DUK__MKESC(8, DUK_ASC_UC_U, DUK_ASC_PLUS);
+}
+
 DUK_LOCAL duk_uint8_t *duk__emit_esc_auto_fast(duk_json_enc_ctx *js_ctx, duk_uint_fast32_t cp, duk_uint8_t *q) {
 	duk_uint_fast32_t tmp;
 	duk_small_uint_t dig;
@@ -1124,32 +1197,27 @@ DUK_LOCAL duk_uint8_t *duk__emit_esc_auto_fast(duk_json_enc_ctx *js_ctx, duk_uin
 	 *
 	 *   (nybble_count << 16) | (escape_char1) | (escape_char2)
 	 */
+	tmp = duk__json_select_esc(js_ctx, cp);
+	if (DUK_UNLIKELY(tmp == 0)) {
+		duk_uint_fast32_t hi, lo;
 
-#if defined(DUK_USE_JX)
-	if (DUK_LIKELY(cp < 0x100UL)) {
-		if (DUK_UNLIKELY(js_ctx->flag_ext_custom != 0U)) {
-			tmp = DUK__MKESC(2, DUK_ASC_BACKSLASH, DUK_ASC_LC_X);
-		} else {
-			tmp = DUK__MKESC(4, DUK_ASC_BACKSLASH, DUK_ASC_LC_U);
-		}
-	} else
-#endif
-	    if (DUK_LIKELY(cp < 0x10000UL)) {
-		tmp = DUK__MKESC(4, DUK_ASC_BACKSLASH, DUK_ASC_LC_U);
-	} else {
-#if defined(DUK_USE_JX)
-		if (DUK_LIKELY(js_ctx->flag_ext_custom != 0U)) {
-			tmp = DUK__MKESC(8, DUK_ASC_BACKSLASH, DUK_ASC_UC_U);
-		} else
-#endif
-		{
-			/* In compatible mode and standard JSON mode, output
-			 * something useful for non-BMP characters.  This won't
-			 * roundtrip but will still be more or less readable and
-			 * more useful than an error.
-			 */
-			tmp = DUK__MKESC(8, DUK_ASC_UC_U, DUK_ASC_PLUS);
-		}
+		cp -= 0x10000UL;
+		hi = 0xd800UL + (cp >> 10);
+		lo = 0xdc00UL + (cp & 0x3ffUL);
+
+		*q++ = DUK_ASC_BACKSLASH;
+		*q++ = DUK_ASC_LC_U;
+		*q++ = duk_lc_digits[(hi >> 12) & 0x0fU];
+		*q++ = duk_lc_digits[(hi >> 8) & 0x0fU];
+		*q++ = duk_lc_digits[(hi >> 4) & 0x0fU];
+		*q++ = duk_lc_digits[(hi >> 0) & 0x0fU];
+		*q++ = DUK_ASC_BACKSLASH;
+		*q++ = DUK_ASC_LC_U;
+		*q++ = duk_lc_digits[(lo >> 12) & 0x0fU];
+		*q++ = duk_lc_digits[(lo >> 8) & 0x0fU];
+		*q++ = duk_lc_digits[(lo >> 4) & 0x0fU];
+		*q++ = duk_lc_digits[(lo >> 0) & 0x0fU];
+		return q;
 	}
 
 	*q++ = (duk_uint8_t) ((tmp >> 8) & 0xff);
@@ -1180,8 +1248,8 @@ DUK_LOCAL void duk__json_enc_key_autoquote(duk_json_enc_ctx *js_ctx, duk_hstring
 	 */
 
 	if (js_ctx->flag_avoid_key_quotes) {
-		k_len = DUK_HSTRING_GET_BYTELEN(k);
-		p_start = (const duk_int8_t *) DUK_HSTRING_GET_DATA(k);
+		k_len = duk_hstring_get_bytelen(k);
+		p_start = (const duk_int8_t *) duk_hstring_get_data(k);
 		p_end = p_start + k_len;
 		p = p_start;
 
@@ -1225,8 +1293,8 @@ DUK_LOCAL void duk__json_enc_quote_string(duk_json_enc_ctx *js_ctx, duk_hstring 
 	DUK_DDD(DUK_DDDPRINT("duk__json_enc_quote_string: h_str=%!O", (duk_heaphdr *) h_str));
 
 	DUK_ASSERT(h_str != NULL);
-	p_start = DUK_HSTRING_GET_DATA(h_str);
-	p_end = p_start + DUK_HSTRING_GET_BYTELEN(h_str);
+	p_start = duk_hstring_get_data(h_str);
+	p_end = p_start + duk_hstring_get_bytelen(h_str);
 	p = p_start;
 
 	DUK__EMIT_1(js_ctx, DUK_ASC_DOUBLEQUOTE);
@@ -1252,6 +1320,8 @@ DUK_LOCAL void duk__json_enc_quote_string(duk_json_enc_ctx *js_ctx, duk_hstring 
 		p_now = p + now;
 
 		while (p < p_now) {
+			duk_bool_t need_esc = 0;
+
 #if defined(DUK_USE_JSON_QUOTESTRING_FASTPATH)
 			duk_uint8_t b;
 
@@ -1330,14 +1400,28 @@ DUK_LOCAL void duk__json_enc_quote_string(duk_json_enc_ctx *js_ctx, duk_hstring 
 					p = p_tmp + 1;
 				}
 
+				/* For valid WTF-8 encode as is, without escaping, even for
+				 * unpaired surrogates.  Codepoints above U+10FFFF should no
+				 * longer happen, but if they do, encode them in a user
+				 * friendly manner.
+				 */
 #if defined(DUK_USE_NONSTD_JSON_ESC_U2028_U2029)
-				if (js_ctx->flag_ascii_only || cp == 0x2028 || cp == 0x2029) {
+				if (js_ctx->flag_ascii_only || cp == 0x2028 || cp == 0x2029 || cp > 0x10ffffUL) {
+					need_esc = 1;
+				}
 #else
-				if (js_ctx->flag_ascii_only) {
+				if (js_ctx->flag_ascii_only || cp > 0x10ffffUL) {
+					need_esc = 1;
+				}
 #endif
+				if (need_esc) {
 					q = duk__emit_esc_auto_fast(js_ctx, cp, q);
 				} else {
-					/* as is */
+					/* Conceptually we should split the non-BMP codepoint
+					 * into a surrogate pair for output.  But since the
+					 * surrogate pair would be combined in WTF-8 sanitization
+					 * we can just emit the UTF-8 codepoint as is.
+					 */
 					DUK_RAW_WRITEINC_XUTF8(q, cp);
 				}
 			}
@@ -1391,7 +1475,7 @@ DUK_LOCAL void duk__json_enc_double(duk_json_enc_ctx *js_ctx) {
 			/* [ ... number ] -> [ ... string ] */
 			duk_numconv_stringify(thr, 10 /*radix*/, 0 /*digits*/, n2s_flags);
 		}
-		h_str = duk_known_hstring(thr, -1);
+		h_str = duk_known_hstring_m1(thr);
 		DUK__EMIT_HSTR(js_ctx, h_str);
 		return;
 	}
@@ -1684,7 +1768,7 @@ DUK_LOCAL void duk__json_enc_bufobj(duk_json_enc_ctx *js_ctx, duk_hbufobj *h_buf
 #if defined(DUK_USE_PREFER_SIZE)
 DUK_LOCAL void duk__json_enc_newline_indent(duk_json_enc_ctx *js_ctx, duk_uint_t depth) {
 	DUK_ASSERT(js_ctx->h_gap != NULL);
-	DUK_ASSERT(DUK_HSTRING_GET_BYTELEN(js_ctx->h_gap) > 0); /* caller guarantees */
+	DUK_ASSERT(duk_hstring_get_bytelen(js_ctx->h_gap) > 0); /* caller guarantees */
 
 	DUK__EMIT_1(js_ctx, 0x0a);
 	while (depth-- > 0) {
@@ -1701,7 +1785,7 @@ DUK_LOCAL void duk__json_enc_newline_indent(duk_json_enc_ctx *js_ctx, duk_uint_t
 	duk_uint8_t *p;
 
 	DUK_ASSERT(js_ctx->h_gap != NULL);
-	DUK_ASSERT(DUK_HSTRING_GET_BYTELEN(js_ctx->h_gap) > 0); /* caller guarantees */
+	DUK_ASSERT(duk_hstring_get_bytelen(js_ctx->h_gap) > 0); /* caller guarantees */
 
 	DUK__EMIT_1(js_ctx, 0x0a);
 	if (DUK_UNLIKELY(depth == 0)) {
@@ -1714,8 +1798,7 @@ DUK_LOCAL void duk__json_enc_newline_indent(duk_json_enc_ctx *js_ctx, duk_uint_t
 	 * avoid multiply with gap_len on every loop.
 	 */
 
-	gap_data = (const duk_uint8_t *) DUK_HSTRING_GET_DATA(js_ctx->h_gap);
-	gap_len = (duk_size_t) DUK_HSTRING_GET_BYTELEN(js_ctx->h_gap);
+	gap_data = (const duk_uint8_t *) duk_hstring_get_data_and_bytelen(js_ctx->h_gap, &gap_len);
 	DUK_ASSERT(gap_len > 0);
 
 	need_bytes = gap_len * depth;
@@ -1883,7 +1966,7 @@ DUK_LOCAL void duk__json_enc_object(duk_json_enc_ctx *js_ctx) {
 		                     (duk_tval *) duk_get_tval(thr, idx_obj),
 		                     (duk_tval *) duk_get_tval(thr, -1)));
 
-		h_key = duk_known_hstring(thr, -1);
+		h_key = duk_known_hstring_m1(thr);
 		DUK_ASSERT(h_key != NULL);
 		DUK_ASSERT(!DUK_HSTRING_HAS_SYMBOL(h_key)); /* proplist filtering; enum options */
 
@@ -2843,9 +2926,9 @@ void duk_bi_json_parse_helper(duk_hthread *thr, duk_idx_t idx_value, duk_idx_t i
 	 * valid and points to the string NUL terminator (which is always
 	 * guaranteed for duk_hstrings.
 	 */
-	js_ctx->p_start = (const duk_uint8_t *) DUK_HSTRING_GET_DATA(h_text);
+	js_ctx->p_start = (const duk_uint8_t *) duk_hstring_get_data(h_text);
 	js_ctx->p = js_ctx->p_start;
-	js_ctx->p_end = ((const duk_uint8_t *) DUK_HSTRING_GET_DATA(h_text)) + DUK_HSTRING_GET_BYTELEN(h_text);
+	js_ctx->p_end = js_ctx->p_start + duk_hstring_get_bytelen(h_text);
 	DUK_ASSERT(*(js_ctx->p_end) == 0x00);
 
 	duk__json_dec_value(js_ctx); /* -> [ ... value ] */
@@ -3085,12 +3168,12 @@ void duk_bi_json_stringify_helper(duk_hthread *thr,
 		DUK_ASSERT(nspace >= 0 && nspace <= 10);
 
 		duk_push_lstring(thr, spaces, (duk_size_t) nspace);
-		js_ctx->h_gap = duk_known_hstring(thr, -1);
+		js_ctx->h_gap = duk_known_hstring_m1(thr);
 		DUK_ASSERT(js_ctx->h_gap != NULL);
 	} else if (duk_is_string_notsymbol(thr, idx_space)) {
 		duk_dup(thr, idx_space);
 		duk_substring(thr, -1, 0, 10); /* clamp to 10 chars */
-		js_ctx->h_gap = duk_known_hstring(thr, -1);
+		js_ctx->h_gap = duk_known_hstring_m1(thr);
 	} else {
 		/* nop */
 	}
@@ -3100,7 +3183,7 @@ void duk_bi_json_stringify_helper(duk_hthread *thr,
 		 * against byte length because character length is more
 		 * expensive.
 		 */
-		if (DUK_HSTRING_GET_BYTELEN(js_ctx->h_gap) == 0) {
+		if (duk_hstring_get_bytelen(js_ctx->h_gap) == 0) {
 			js_ctx->h_gap = NULL;
 		}
 	}

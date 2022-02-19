@@ -177,8 +177,7 @@ DUK_INTERNAL duk_ret_t duk_bi_array_constructor(duk_hthread *thr) {
 
 DUK_INTERNAL duk_ret_t duk_bi_array_constructor_is_array(duk_hthread *thr) {
 	DUK_ASSERT_TOP(thr, 1);
-	duk_push_boolean(thr, duk_js_isarray(DUK_GET_TVAL_POSIDX(thr, 0)));
-	return 1;
+	return duk_push_boolean_return1(thr, duk_js_isarray(DUK_GET_TVAL_POSIDX(thr, 0)));
 }
 
 /*
@@ -836,7 +835,7 @@ DUK_LOCAL void duk__array_qsort(duk_hthread *thr, duk_int_t lo, duk_int_t hi) {
 	DUK_ASSERT(hi - lo + 1 >= 2);
 
 	/* randomized pivot selection */
-	p = lo + (duk_int_t) (DUK_UTIL_GET_RANDOM_DOUBLE(thr) * (duk_double_t) (hi - lo + 1));
+	p = lo + (duk_int_t) (duk_util_get_random_double(thr) * (duk_double_t) (hi - lo + 1));
 	DUK_ASSERT(p >= lo && p <= hi);
 	DUK_DDD(DUK_DDDPRINT("lo=%ld, hi=%ld, chose pivot p=%ld", (long) lo, (long) hi, (long) p));
 
