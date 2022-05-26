@@ -259,6 +259,16 @@ DUK_INTERNAL duk_hstring *duk_hobject_get_internal_value_string(duk_heap *heap, 
 	return h;
 }
 
+DUK_INTERNAL duk_hobject *duk_hobject_get_internal_value_object(duk_heap *heap, duk_hobject *obj) {
+	duk_hobject *h;
+
+	h = (duk_hobject *) duk_hobject_get_internal_value_heaphdr(heap, obj);
+	if (h != NULL) {
+		DUK_ASSERT(DUK_HEAPHDR_IS_ANY_OBJECT((duk_heaphdr *) h));
+	}
+	return h;
+}
+
 DUK_LOCAL duk_hobject *duk__hobject_get_entry_object_stridx(duk_heap *heap, duk_hobject *obj, duk_small_uint_t stridx) {
 	duk_tval *tv;
 	duk_hobject *h;
@@ -310,7 +320,7 @@ DUK_INTERNAL duk_size_t duk_hobject_get_length(duk_hthread *thr, duk_hobject *ob
 	duk_push_hstring_stridx(thr, DUK_STRIDX_LENGTH);
 	(void) duk_prop_getvalue_push(thr, duk_normalize_index(thr, -2), DUK_GET_TVAL_NEGIDX(thr, -1));
 	val = duk_to_number_m1(thr);
-	duk_pop_3_unsafe(thr);
+	duk_pop_3_known(thr);
 
 	/* This isn't part of ECMAScript semantics; return a value within
 	 * duk_size_t range, or 0 otherwise.
@@ -440,9 +450,9 @@ DUK_INTERNAL void duk_hobject_object_seal_freeze_helper(duk_hthread *thr, duk_ho
 			defprop_flags = DUK_DEFPROP_CLEAR_CONFIGURABLE | DUK_DEFPROP_THROW;
 			(void) duk_prop_defown(thr, obj, duk_known_tval(thr, -1), 0, defprop_flags);
 		}
-		duk_pop_unsafe(thr);
+		duk_pop_known(thr);
 	}
 
-	duk_pop_unsafe(thr);
+	duk_pop_known(thr);
 	return;
 }

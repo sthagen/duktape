@@ -538,7 +538,7 @@ DUK_LOCAL duk_bool_t duk__setcheck_found_setter_helper(duk_hthread *thr,
 		DUK_UNREF(use_key);
 		duk_call_method(thr, 1); /* [ setter receiver(= this) val ] -> [ retval ] */
 #endif
-		duk_pop_unsafe(thr);
+		duk_pop_known(thr);
 		return 1;
 	} else {
 		/* If setter is missing, fail write. */
@@ -748,7 +748,7 @@ DUK_LOCAL DUK_COLD DUK_NOINLINE duk_bool_t duk__setcheck_idxkey_arguments_helper
 	/* Arguments map write. */
 	duk_dup(thr, idx_val);
 	duk_js_putvar_envrec(thr, env, varname, DUK_GET_TVAL_NEGIDX(thr, -1), throw_flag);
-	duk_pop_unsafe(thr);
+	duk_pop_known(thr);
 
 	/* Then normal [[Set]] check which may not hit a property, may hit
 	 * a setter, etc, due to side effects from above.
@@ -856,7 +856,7 @@ DUK_LOCAL duk_bool_t duk__setcheck_idxkey_typedarray(duk_hthread *thr,
 		rc = DUK__SETCHECK_DONE_SUCCESS;
 	}
 
-	duk_pop_2_unsafe(thr);
+	duk_pop_2_known(thr);
 	return rc; /* Never continue lookup. */
 }
 #else
@@ -1560,8 +1560,8 @@ DUK_LOCAL duk_bool_t duk__setfinal_strkey_proxy(duk_hthread *thr, duk_hobject *o
 		defprop_flags = DUK_DEFPROP_HAVE_VALUE | DUK_DEFPROP_SET_WEC;
 	}
 	duk_dup(thr, idx_val);
-	rc = duk_prop_defown_strkey(thr, obj, key, duk_get_top_index(thr), defprop_flags);
-	duk_pop_unsafe(thr);
+	rc = duk_prop_defown_strkey(thr, obj, key, duk_get_top_index_known(thr), defprop_flags);
+	duk_pop_known(thr);
 	return rc;
 
 fail_accessor:
@@ -1686,8 +1686,8 @@ DUK_LOCAL duk_bool_t duk__setfinal_idxkey_proxy(duk_hthread *thr, duk_hobject *o
 		defprop_flags = DUK_DEFPROP_HAVE_VALUE | DUK_DEFPROP_SET_WEC;
 	}
 	duk_dup(thr, idx_val);
-	rc = duk_prop_defown_idxkey(thr, obj, idx, duk_get_top_index(thr), defprop_flags);
-	duk_pop_unsafe(thr);
+	rc = duk_prop_defown_idxkey(thr, obj, idx, duk_get_top_index_known(thr), defprop_flags);
+	duk_pop_known(thr);
 	return rc;
 
 fail_accessor:
@@ -2400,7 +2400,7 @@ DUK_LOCAL duk_bool_t duk__prop_set_proxy_tail(duk_hthread *thr, duk_hobject *obj
 	DUK_DD(DUK_DDPRINT("proxy policy check for 'set' trap disabled in configuration"));
 #endif
 
-	duk_pop_unsafe(thr);
+	duk_pop_known(thr);
 
 	return trap_rc;
 }
@@ -2504,10 +2504,12 @@ DUK_LOCAL DUK_ALWAYS_INLINE duk_bool_t duk__prop_set_stroridx_helper(duk_hthread
 		}
 
 #if defined(DUK_USE_ASSERTIONS)
+#if defined(DUK_USE_REFERENCE_COUNTING)
 		DUK_ASSERT(DUK_HEAPHDR_GET_REFCOUNT((duk_heaphdr *) target) > 0);
 		if (side_effect_safe && DUK_HEAPHDR_GET_REFCOUNT((duk_heaphdr *) target) == 1) {
 			DUK_DD(DUK_DDPRINT("'target' is only reachable via stabilized value stack slot"));
 		}
+#endif
 #endif
 
 		DUK_GC_TORTURE(thr->heap);
@@ -2610,10 +2612,12 @@ DUK_LOCAL DUK_ALWAYS_INLINE duk_bool_t duk__prop_set_stroridx_helper(duk_hthread
 		}
 
 #if defined(DUK_USE_ASSERTIONS)
+#if defined(DUK_USE_REFERENCE_COUNTING)
 		DUK_ASSERT(DUK_HEAPHDR_GET_REFCOUNT((duk_heaphdr *) target) > 0);
 		if (side_effect_safe && DUK_HEAPHDR_GET_REFCOUNT((duk_heaphdr *) target) == 1) {
 			DUK_DD(DUK_DDPRINT("'target' is only reachable via stabilized value stack slot"));
 		}
+#endif
 #endif
 
 		next = DUK_HOBJECT_GET_PROTOTYPE(thr->heap, target);
@@ -2672,7 +2676,7 @@ allow_write:
 
 success:
 	if (side_effect_safe) {
-		duk_pop_unsafe(thr);
+		duk_pop_known(thr);
 	}
 	return 1;
 
@@ -2681,7 +2685,7 @@ fail:
 	 * in which case we don't actually throw.
 	 */
 	if (side_effect_safe) {
-		duk_pop_unsafe(thr);
+		duk_pop_known(thr);
 	}
 	if (use_key) {
 		return duk__prop_set_error_objidx_strkey(thr, idx_recv, key, throw_flag);
@@ -2905,7 +2909,7 @@ duk__prop_putvalue_idxkey_inidx(duk_hthread *thr, duk_idx_t idx_recv, duk_uarrid
 			/* Cannot alter value at 'idx_val' so must dup for now. */
 			duk_dup(thr, idx_val);
 			coerced_val = duk_to_uint32(thr, -1); /* arbitrary side effects */
-			duk_pop_unsafe(thr);
+			duk_pop_known(thr);
 		}
 
 		if (DUK_LIKELY(idx < DUK_HBUFFER_GET_SIZE(h))) {
@@ -3054,13 +3058,23 @@ fail_not_writable:
 
 DUK_INTERNAL duk_bool_t
 duk_prop_putvalue_idxkey_inidx(duk_hthread *thr, duk_idx_t idx_recv, duk_uarridx_t idx, duk_idx_t idx_val, duk_bool_t throw_flag) {
+#if defined(DUK_USE_ASSERTIONS)
+	duk_idx_t entry_top;
+#endif
+
 	DUK_ASSERT(thr != NULL);
 	DUK_ASSERT(duk_is_valid_posidx(thr, idx_recv));
+	DUK_ASSERT_ARRIDX_VALID(idx);
 	DUK_ASSERT(duk_is_valid_posidx(thr, idx_val));
 	DUK_ASSERT(throw_flag == 0 || throw_flag == 1);
+#if defined(DUK_USE_ASSERTIONS)
+	entry_top = duk_get_top(thr);
+#endif
 
 	if (DUK_LIKELY(idx <= DUK_ARRIDX_MAX)) {
-		return duk__prop_putvalue_idxkey_inidx(thr, idx_recv, idx, idx_val, throw_flag);
+		duk_bool_t rc = duk__prop_putvalue_idxkey_inidx(thr, idx_recv, idx, idx_val, throw_flag);
+		DUK_ASSERT(duk_get_top(thr) == entry_top);
+		return rc;
 	} else {
 		duk_bool_t rc;
 		duk_hstring *key;
@@ -3068,28 +3082,48 @@ duk_prop_putvalue_idxkey_inidx(duk_hthread *thr, duk_idx_t idx_recv, duk_uarridx
 		DUK_DD(DUK_DDPRINT("corner case, input idx 0xffffffff is not an arridx, must coerce to string"));
 		key = duk_push_u32_tohstring(thr, idx);
 		rc = duk__prop_putvalue_strkey_inidx(thr, idx_recv, key, idx_val, throw_flag);
-		duk_pop_unsafe(thr);
+		duk_pop_known(thr);
+		DUK_ASSERT(duk_get_top(thr) == entry_top);
 		return rc;
 	}
 }
 
 DUK_INTERNAL duk_bool_t
 duk_prop_putvalue_strkey_inidx(duk_hthread *thr, duk_idx_t idx_recv, duk_hstring *key, duk_idx_t idx_val, duk_bool_t throw_flag) {
+#if defined(DUK_USE_ASSERTIONS)
+	duk_idx_t entry_top;
+#endif
+
 	DUK_ASSERT(thr != NULL);
 	DUK_ASSERT(duk_is_valid_posidx(thr, idx_recv));
 	DUK_ASSERT(key != NULL);
 	DUK_ASSERT(duk_is_valid_posidx(thr, idx_val));
 	DUK_ASSERT(throw_flag == 0 || throw_flag == 1);
+#if defined(DUK_USE_ASSERTIONS)
+	entry_top = duk_get_top(thr);
+#endif
 
 	if (DUK_UNLIKELY(DUK_HSTRING_HAS_ARRIDX(key))) {
-		return duk__prop_putvalue_idxkey_inidx(thr, idx_recv, duk_hstring_get_arridx_fast_known(key), idx_val, throw_flag);
+		duk_bool_t rc;
+
+		rc = duk__prop_putvalue_idxkey_inidx(thr, idx_recv, duk_hstring_get_arridx_fast_known(key), idx_val, throw_flag);
+		DUK_ASSERT(duk_get_top(thr) == entry_top);
+		return rc;
 	} else {
-		return duk__prop_putvalue_strkey_inidx(thr, idx_recv, key, idx_val, throw_flag);
+		duk_bool_t rc;
+
+		DUK_ASSERT(!DUK_HSTRING_HAS_ARRIDX(key));
+		rc = duk__prop_putvalue_strkey_inidx(thr, idx_recv, key, idx_val, throw_flag);
+		DUK_ASSERT(duk_get_top(thr) == entry_top);
+		return rc;
 	}
 }
 
 DUK_INTERNAL duk_bool_t
 duk_prop_putvalue_inidx(duk_hthread *thr, duk_idx_t idx_recv, duk_tval *tv_key, duk_idx_t idx_val, duk_bool_t throw_flag) {
+#if defined(DUK_USE_ASSERTIONS)
+	duk_idx_t entry_top;
+#endif
 	duk_bool_t rc;
 	duk_hstring *key;
 	duk_uarridx_t idx;
@@ -3106,6 +3140,9 @@ duk_prop_putvalue_inidx(duk_hthread *thr, duk_idx_t idx_recv, duk_tval *tv_key, 
 	 * because it might be a VM register source.
 	 */
 	DUK_ASSERT(throw_flag == 0 || throw_flag == 1);
+#if defined(DUK_USE_ASSERTIONS)
+	entry_top = duk_get_top(thr);
+#endif
 
 	switch (DUK_TVAL_GET_TAG(tv_key)) {
 	case DUK_TAG_STRING:
@@ -3171,14 +3208,19 @@ duk_prop_putvalue_inidx(duk_hthread *thr, duk_idx_t idx_recv, duk_tval *tv_key, 
 	tv_key = NULL;
 	key = duk_to_property_key_hstring(thr, -1);
 	rc = duk_prop_putvalue_strkey_inidx(thr, idx_recv, key, idx_val, throw_flag);
-	duk_pop_unsafe(thr);
+	duk_pop_known(thr);
+	DUK_ASSERT(duk_get_top(thr) == entry_top);
 	return rc;
 
 use_idx:
 	DUK_ASSERT_ARRIDX_VALID(idx);
-	return duk__prop_putvalue_idxkey_inidx(thr, idx_recv, idx, idx_val, throw_flag);
+	rc = duk__prop_putvalue_idxkey_inidx(thr, idx_recv, idx, idx_val, throw_flag);
+	DUK_ASSERT(duk_get_top(thr) == entry_top);
+	return rc;
 
 use_str:
 	DUK_ASSERT(!DUK_HSTRING_HAS_ARRIDX(key));
-	return duk__prop_putvalue_strkey_inidx(thr, idx_recv, key, idx_val, throw_flag);
+	rc = duk__prop_putvalue_strkey_inidx(thr, idx_recv, key, idx_val, throw_flag);
+	DUK_ASSERT(duk_get_top(thr) == entry_top);
+	return rc;
 }
